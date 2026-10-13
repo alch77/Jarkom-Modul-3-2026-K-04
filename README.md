@@ -1,15 +1,10 @@
-# Laporan Resmi Praktikum Modul 3 - Jaringan Komputer 2026
-## Curtain Protocol: Shibuya Incident
-### Kelompok: K-04
-
----
+# PRAKTIKUM JARKOM MODUL 3 KELOMPOK 04 - 2026
 
 ## 👥 Anggota Kelompok
 | Nama | NRP |
 | :--- | :--- |
-| Albert Chen | 5027241004 |
-| *[Anggota 2]* | *[NRP]* |
-| *[Anggota 3]* | *[NRP]* |
+| Albert Chen | 5027251034 |
+| Boma Sahya Aryaguna | 5027251125 |
 
 ---
 
