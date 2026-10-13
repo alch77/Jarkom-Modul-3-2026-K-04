@@ -274,11 +274,13 @@ service isc-dhcp-server restart
 * Periksa isi `/etc/dhcp/dhcpd.conf` dan restart service:
   
   ![Konfigurasi dhcpd.conf dan restart service di tengen](assets/Screenshot%202026-10-12%20142340.png)
+  
   Menampilkan berkas konfigurasi `/etc/dhcp/dhcpd.conf` di `tengen` yang telah mendeklarasikan subnet lokal Network 4 tanpa range, subnet Network 2, dan subnet Network 3, diikuti perintah restart dan status service yang menunjukkan `dhcpd is running`.
 
 * Uji validasi sintaks dengan `dhcpd -t -cf /etc/dhcp/dhcpd.conf` dan verifikasi service restart:
   
   ![Uji Sintaks dhcpd dan status running](assets/Screenshot%202026-10-12%20163313.png)
+  
   Pengujian berkas konfigurasi menggunakan `dhcpd -t -cf /etc/dhcp/dhcpd.conf` yang mengonfirmasi konfigurasi valid, pembuatan database `/var/lib/dhcp/dhcpd.leases`, serta service `isc-dhcp-server` yang berhasil di-restart dengan status aktif (`running`).
 
 * Verifikasi IP `192.213.4.10` dan proses `dhcpd` yang berjalan di background:
@@ -324,6 +326,7 @@ service isc-dhcp-relay status
 * Memastikan binding upstream dan downstream relay agent pada interface yang ditentukan:
   
   ![Upstream dan Downstream Interface Relay di jichi](assets/Screenshot%202026-10-12%20163412.png)
+  
   Log output eksekusi restart layanan `isc-dhcp-relay` di `jichi` yang memperlihatkan binding relay agent ke interface `eth2`, `eth3`, dan `eth4` baik sebagai upstream maupun downstream.
 
 * Verifikasi antarmuka jaringan `jichi`, routing, sysctl forwarding, dan proses background `dhcrelay`:
@@ -395,6 +398,7 @@ dhcpd -t -cf /etc/dhcp/dhcpd.conf && service isc-dhcp-server restart
 * Verifikasi daftar leases Network 2 di `/var/lib/dhcp/dhcpd.leases` pada server `tengen`:
   
   ![Daftar leases Network 2 di dhcpd.leases tengen](assets/Screenshot%202026-10-12%20171238.png)
+  
   Output perintah `grep -E "^lease|hardware" /var/lib/dhcp/dhcpd.leases` pada server `tengen` yang membuktikan bahwa lease untuk IP `192.213.2.10`, `192.213.2.11`, `192.213.2.70`, dan `192.213.2.71` tercatat secara sah terikat ke MAC address masing-masing client.
 
 ---
@@ -470,6 +474,7 @@ dhcpd -t -cf /etc/dhcp/dhcpd.conf && service isc-dhcp-server restart
 * Periksa `/etc/resolv.conf` di salah satu klien (contoh: `ino`) untuk memastikan nameserver `192.213.1.2` dan `192.213.1.3`:
   
   ![Verifikasi resolv.conf di ino](assets/Screenshot%202026-10-12%20175312.png)
+  
   Pengecekan berkas `/etc/resolv.conf` pada node klien `ino` yang menunjukkan DHCP options telah berhasil diterima, yaitu DNS nameserver `192.213.1.2` (`utahime`) dan `192.213.1.3` (`shoko`).
 
 ---
@@ -512,6 +517,7 @@ udhcpc -i eth0 -n -q
 * Periksa MAC Address fisik interface `eth0` di `kugisaki`:
   
   ![Pengecekan MAC Address di kugisaki](assets/Screenshot%202026-10-12%20133630.png)
+  
   Pengecekan MAC address pada interface `eth0` node `kugisaki` menggunakan perintah `ip a | grep ether`, diperoleh nilai MAC address `02:42:02:1e:9b:00`.
 
 * Uji sintaks `dhcpd -t` dan restart service DHCP di `tengen`:
@@ -522,16 +528,19 @@ udhcpc -i eth0 -n -q
 * Lakukan permohonan lease DHCP awal pada `kugisaki`:
   
   ![Lease didapat oleh kugisaki sebesar 192.213.3.99](assets/Screenshot%202026-10-12%20164805.png)
+  
   Klien `kugisaki` menjalankan `udhcpc -i eth0 -n -q` dan berhasil memperoleh alamat sewa IP tetap `192.213.3.99` dari DHCP server `192.213.4.10` dengan lease time 600 detik.
 
 * Lakukan flush IP dan verifikasi antarmuka `ip -br a`:
   
   ![Verifikasi fixed address kugisaki](assets/Screenshot%202026-10-12%20180016.png)
+  
   Pengujian pembaruan lease (`ip addr flush dev eth0` diikuti `udhcpc`) dan verifikasi `ip -br a` yang memastikan bahwa antarmuka `eth0` `kugisaki` tetap konsisten mendapatkan IP reservasi `192.213.3.99/24`.
 
 * Uji validasi konsistensi fixed IP pasca reboot/renew:
   
   ![Validasi konsistensi fixed IP kugisaki](assets/Screenshot%202026-10-12%20203716.png)
+  
   Uji validasi ulang pada `kugisaki` pasca restart/renew yang kembali mengonfirmasi alamat IP yang diperoleh tetap berada pada fixed lease `192.213.3.99`.
 
 ---
@@ -637,6 +646,7 @@ Menguji respon kegagalan sistem saat perantara relay terputus, memastikan gejala
 * Matikan service DHCP Relay di `jichi` dan paksa client meminta lease untuk mencatat gejalanya:
   
   ![Client gagal mendapatkan lease saat DHCP relay dimatikan](assets/Screenshot%202026-10-12%20191252.png)
+  
   Kondisi saat service DHCP Relay di `jichi` dimatikan. Klien `itadori` mencoba meminta IP (`udhcpc -i eth0 -n -q -t 3 -T 2`) dan mengirim broadcast discover sebanyak 3 kali tanpa respon hingga timeout dengan pesan `udhcpc failed to get a DHCP lease; no lease, failing`.
 
 * Nyalakan kembali service DHCP Relay di `jichi` dan minta lease kembali dari client:
@@ -647,6 +657,7 @@ Menguji respon kegagalan sistem saat perantara relay terputus, memastikan gejala
 * Verifikasi pemulihan lease dan gateway pada client:
   
   ![Verifikasi pemulihan lease pada itadori](assets/Screenshot%202026-10-12%20203557.png)
+  
   Pengujian pemulihan menyeluruh pada `itadori`: setelah `ip addr flush dev eth0`, eksekusi `udhcpc` berhasil mendapatkan lease `192.213.2.10` dengan lease time 495 detik yang tersisa.
 
 ---
@@ -689,9 +700,11 @@ Memastikan seluruh konfigurasi jaringan, routing, dan layanan DHCP bersifat pers
 * Di client Network 2: lakukan renew DHCP untuk mengonfirmasi kebijakan Pool 1 & Pool 2 tetap aktif pasca restart:
   
   ![Pengujian ulang perolehan IP itadori pasca restart](assets/Screenshot%202026-10-12%20203557.png)
+  
   Pengujian renew lease pada klien `itadori` setelah server dan relay di-restart. Klien dengan cepat mendapatkan kembali alamat IP `192.213.2.10` membuktikan reliabilitas mekanisme autostart.
 
 * Di client VIP `kugisaki`: lakukan renew DHCP untuk mengonfirmasi fixed address tetap berlaku pasca restart:
   
   ![Pengujian ulang fixed IP kugisaki pasca restart](assets/Screenshot%202026-10-12%20203716.png)
+  
   Pengujian renew lease pada node VIP `kugisaki` setelah restart. Reservasi alamat tetap konsisten menghasilkan IP `192.213.3.99` dengan lease time 600 detik sesuai deklarasi statis.
