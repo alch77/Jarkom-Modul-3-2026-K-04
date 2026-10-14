@@ -191,22 +191,26 @@ bash /root/tengen.sh
    * Menjalankan `ip -br a` untuk melihat IP seluruh interface, cek parameter `net.ipv4.ip_forward` (harus bernilai `1`), cek aturan iptables NAT `iptables -t nat -S POSTROUTING` (memastikan aturan MASQUERADE terpasang), serta tes koneksi internet `ping 8.8.8.8 -c 2`.
      
      ![Verifikasi Routing, iptables MASQUERADE, dan IP Forward di jichi](assets/Screenshot%202026-10-12%20163134.png)
+     
      Menampilkan daftar interface `jichi` dengan alamat IP yang sesuai (`eth0` ke WAN 192.168.122.100, `eth1`–`eth4` ke 192.213.1.1 s/d 192.213.4.1), parameter `net.ipv4.ip_forward = 1`, aturan iptables `-A POSTROUTING -o eth0 -j MASQUERADE`, serta hasil ping berhasil ke `8.8.8.8`.
 
    * Tes koneksi internet domain dan resolusi DNS: `ping google.com -c 3`.
      
      ![Uji Ping Internet dari jichi](assets/Screenshot%202026-10-12%20123454.png)
+     
      Menunjukkan router `jichi` berhasil melakukan ping ke domain publik `google.com` dengan packet loss 0%, serta isi berkas `/etc/resolv.conf` telah diarahkan ke nameserver NAT GNS3 (`192.168.122.1`).
 
-2. **Verifikasi Host Infrastruktur**:
+3. **Verifikasi Host Infrastruktur**:
    * Di `utahime`, lakukan tes ping ke gateway (`192.213.1.1`), Google DNS (`8.8.8.8`), dan domain (`google.com`).
      
      ![Uji Ping Gateway dan Internet dari utahime](assets/Screenshot%202026-10-12%20163207.png)
+     
      Menunjukkan node DMZ `utahime` memiliki IP statis `192.213.1.2/24` dengan default gateway `192.213.1.1`. Tes ping berturut-turut ke gateway lokal (`192.213.1.1`), DNS eksternal (`8.8.8.8`), dan domain `google.com` seluruhnya sukses dengan 0% packet loss.
 
    * Di `gojo`, lakukan verifikasi `ip a` dan `ping google.com -c 2`.
      
      ![Verifikasi IP Address dan Ping dari gojo](assets/Screenshot%202026-10-12%20130456.png)
+     
      Menampilkan node `gojo` berhasil melakukan resolusi DNS dan ping ke `google.com`, serta verifikasi antarmuka jaringan menunjukkan interface `eth0` terkonfigurasi dengan alamat IP statis `192.213.1.4/24`.
 
 ---
@@ -286,6 +290,7 @@ service isc-dhcp-server restart
 * Verifikasi IP `192.213.4.10` dan proses `dhcpd` yang berjalan di background:
   
   ![Status isc-dhcp-server aktif di tengen](assets/Screenshot%202026-10-12%20203139.png)
+  
   Verifikasi alamat IP interface `eth0` `192.213.4.10/24` pada node `tengen`, serta output `ps aux | grep dhcp` yang membuktikan daemon `dhcpd -cf /etc/dhcp/dhcpd.conf eth0` aktif berjalan di background.
 
 ---
@@ -332,6 +337,7 @@ service isc-dhcp-relay status
 * Verifikasi antarmuka jaringan `jichi`, routing, sysctl forwarding, dan proses background `dhcrelay`:
   
   ![Proses dhcrelay berjalan di latar belakang pada jichi](assets/Screenshot%202026-10-12%20194719.png)
+  
   Terminal `jichi` menunjukkan informasi antarmuka `ip -br a`, tabel routing, parameter `net.ipv4.ip_forward = 1`, serta proses `dhcrelay -i eth2 -i eth3 -i eth4 192.213.4.10` yang berjalan aktif.
 
 ---
@@ -567,6 +573,7 @@ awk '/^lease/{ip=$2} /binding state/{st[ip]=$3} /hardware ethernet/{mac[ip]=$3} 
 * Periksa catatan masa sewa (`starts`, `ends`) dan hardware MAC di berkas `/var/lib/dhcp/dhcpd.leases`:
   
   ![Pemeriksaan log lease time di dhcpd.leases](assets/Screenshot%202026-10-12%20175114.png)
+  
   Menampilkan daftar entri sewa di file `/var/lib/dhcp/dhcpd.leases` pada `tengen`. Terlihat waktu mulai (`starts`), waktu berakhir (`ends`), alamat IP, serta MAC address masing-masing node. Perbedaan selisih waktu sewa membuktikan lease time 600s untuk Network 2, 1800s untuk `ino` & `kusakabe`, dan 43200s (12 jam) untuk `miwa`.
 
 * Ekstraksi dan periksa status binding aktif seluruh client menggunakan script `awk`:
@@ -602,6 +609,7 @@ tshark -r /root/dora.pcap
 * Lakukan packet capture saat client meminta lease baru:
   
   ![Packet Capture tcpdump di tengen](assets/Screenshot%202026-10-12%20185533.png)
+  
   Menjalankan `tcpdump -i eth0 -n -vvv 'udp port 67 or udp port 68' -w /root/dora.pcap` pada `tengen` saat klien meminta IP. Terlihat indikator 4 paket berhasil ditangkap (`4 packets captured, 4 packets received by filter`).
 
 * Analisis paket pcap menggunakan `tshark` untuk mengidentifikasi 4 urutan lengkap protokol DHCP (DORA) dan field relay agent:
@@ -690,11 +698,13 @@ Memastikan seluruh konfigurasi jaringan, routing, dan layanan DHCP bersifat pers
 * Di `tengen`: restart node dan periksa status `service isc-dhcp-server status` serta `ps aux | grep dhcp`:
   
   ![Verifikasi status DHCP Server tengen aktif setelah restart](assets/Screenshot%202026-10-12%20203139.png)
+  
   Setelah node `tengen` di-restart, pengecekan `ip -br a` menunjukkan IP `192.213.4.10/24` terpasang, dan pengecekan `ps aux | grep dhcp` membuktikan bahwa proses `dhcpd -cf /etc/dhcp/dhcpd.conf eth0` otomatis berjalan tanpa harus dijalankan manual.
 
 * Di `jichi`: restart node dan periksa status `service isc-dhcp-relay status` serta `ps aux | grep dhcrelay`:
   
   ![Verifikasi status DHCP Relay jichi aktif setelah restart](assets/Screenshot%202026-10-12%20194719.png)
+  
   Setelah node `jichi` di-restart, seluruh interface gateway dan default routing terpasang sempurna, forwarding aktif, dan proses `dhcrelay -i eth2 -i eth3 -i eth4 192.213.4.10` otomatis running di background.
 
 * Di client Network 2: lakukan renew DHCP untuk mengonfirmasi kebijakan Pool 1 & Pool 2 tetap aktif pasca restart:
