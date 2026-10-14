@@ -1,6 +1,6 @@
 # PRAKTIKUM JARKOM MODUL 3 KELOMPOK 04 - 2026
 
-## 👥 Anggota Kelompok
+## Anggota Kelompok
 | Nama | NRP |
 | :--- | :--- |
 | Albert Chen | 5027251034 |
@@ -8,7 +8,7 @@
 
 ---
 
-## 🗺️ Topologi Jaringan & Pembagian Wilayah
+## Topologi Jaringan & Pembagian Wilayah
 
 Infrastruktur jaringan Jujutsu High terbagi menjadi 4 segmen wilayah di bawah kendali router utama **jichi** yang terhubung ke Internet/NAT:
 
@@ -46,7 +46,7 @@ Infrastruktur jaringan Jujutsu High terbagi menjadi 4 segmen wilayah di bawah ke
 
 ---
 
-## 📋 Tabel Pengalamatan IP (Addressing Table)
+## Tabel Pengalamatan IP (Addressing Table)
 
 Prefix Kelompok: `192.213.X.X`
 
@@ -76,7 +76,7 @@ Prefix Kelompok: `192.213.X.X`
 
 ---
 
-## 📦 Soal 1: Pemulihan Konektivitas Dasar & Routing Gateway
+## Soal 1: Pemulihan Konektivitas Dasar & Routing Gateway
 
 ### Penyampaian Ulang Soal
 Ketika Curtain menutup Shibuya, jalur komunikasi antar zona Jujutsu High terputus. Pulihkan konektivitas dasar dengan mengonfigurasi `jichi`: `eth0` memperoleh WAN dari NAT, sedangkan `eth1`–`eth4` menjadi gateway Network 1–4 sesuai tabel pemetaan. Aktifkan IPv4 forwarding dan source NAT, lalu tetapkan IP statis host infrastruktur sesuai tabel spesifikasi. Buktikan konektivitas setiap host ke gateway dan akses eksternal dari host yang relevan.
@@ -211,7 +211,7 @@ bash /root/tengen.sh
 
 ---
 
-## 📦 Soal 2: Konfigurasi DHCP Server di Data Center (Tengen)
+## Soal 2: Konfigurasi DHCP Server di Data Center (Tengen)
 
 ### Penyampaian Ulang Soal
 Tengen, penjaga pusat distribusi di Data Center, harus mengambil alih pengalokasian alamat bagi wilayah yang membutuhkan konfigurasi dinamis. Konfigurasikan `isc-dhcp-server` pada `192.213.4.10`. Deklarasikan Network 4 (`192.213.4.0/24`) sebagai subnet lokal tanpa pool dinamis, lalu siapkan scope DHCP untuk Network 2 (`192.213.2.0/24`) dan Network 3 (`192.213.3.0/24`). Validasi konfigurasi dan pastikan service aktif tanpa error “No subnet declaration”.
@@ -290,7 +290,7 @@ service isc-dhcp-server restart
 
 ---
 
-## 📦 Soal 3: Konfigurasi DHCP Relay Agent (Jichi)
+## Soal 3: Konfigurasi DHCP Relay Agent (Jichi)
 
 ### Penyampaian Ulang Soal
 Permintaan alamat dari Divisi A dan Divisi B tidak dapat menyeberangi subnet secara langsung. Konfigurasikan `jichi` sebagai DHCP Relay menuju `tengen` (`192.213.4.10`), menggunakan `eth2` untuk Network 2 dan `eth3` untuk Network 3. Buktikan bahwa client dari kedua subnet berhasil memperoleh lease melalui relay.
@@ -336,7 +336,7 @@ service isc-dhcp-relay status
 
 ---
 
-## 📦 Soal 4: Pemisahan Pool Dinamis Divisi A (Network 2)
+## Soal 4: Pemisahan Pool Dinamis Divisi A (Network 2)
 
 ### Penyampaian Ulang Soal
 Agar tim Dev dan Support di Divisi A menerima jatah alamat yang berbeda, atur dua pool DHCP pada Network 2. Tetapkan Pool 1 (`192.213.2.10`–`192.213.2.35`) untuk `itadori` dan `fushiguro`, serta Pool 2 (`192.213.2.70`–`192.213.2.95`) untuk `zenin` dan `okkotsu`. Rentang `192.213.2.36`–`192.213.2.69` tidak boleh dialokasikan. Karena seluruh client berada pada subnet yang sama, gunakan DHCP class berdasarkan MAC Address atau Client ID untuk memisahkan kedua kelompok.
@@ -403,7 +403,7 @@ dhcpd -t -cf /etc/dhcp/dhcpd.conf && service isc-dhcp-server restart
 
 ---
 
-## 📦 Soal 5: Konfigurasi Lease Time & Options Divisi B (Network 3)
+## Soal 5: Konfigurasi Lease Time & Options Divisi B (Network 3)
 
 ### Penyampaian Ulang Soal
 Setiap tim lapangan memiliki durasi operasi yang berbeda. Pada Network 3, berikan short lease 30 menit (1800 detik) kepada `ino` dan `kusakabe`, serta long lease 12 jam (43200 detik) kepada `miwa`. Gunakan pool short lease `192.213.3.10`–`192.213.3.89` dan pool long lease `192.213.3.100`–`192.213.3.199`. Sesuaikan `default-lease-time` dan `max-lease-time` untuk setiap kelas client. Berikan pula DHCP options berupa DNS `192.213.1.2` dan `192.213.1.3`, serta domain-search `K04.com`.
@@ -479,7 +479,7 @@ dhcpd -t -cf /etc/dhcp/dhcpd.conf && service isc-dhcp-server restart
 
 ---
 
-## 📦 Soal 6: DHCP Static Lease VIP (Kugisaki)
+## Soal 6: DHCP Static Lease VIP (Kugisaki)
 
 ### Penyampaian Ulang Soal
 Kugisaki ditetapkan sebagai personel VIP yang harus mempertahankan alamat yang sama setiap kali terhubung. Buat DHCP static lease berdasarkan MAC Address client tersebut dengan fixed address `192.213.3.99`. Pastikan alamat ini berada di luar seluruh pool dinamis, validasi konfigurasi server, lalu renew lease pada client. Buktikan bahwa alamat yang diterima sesuai dengan reservasi.
@@ -545,7 +545,7 @@ udhcpc -i eth0 -n -q
 
 ---
 
-## 📦 Soal 7: Verifikasi Seluruh Client & Analisis Database Leases
+## Soal 7: Verifikasi Seluruh Client & Analisis Database Leases
 
 ### Penyampaian Ulang Soal
 Setelah aturan alokasi diterapkan, pastikan setiap client menerima konfigurasi jaringan sesuai wilayahnya: subnet mask `255.255.255.0` (/24), gateway dan broadcast address yang benar, DNS `192.213.1.2` serta `192.213.1.3`, dan domain-search yang ditentukan. Periksa IP address dan routing seluruh client Divisi A dan Divisi B, kemudian cocokkan lease dengan `/var/lib/dhcp/dhcpd.leases` pada `tengen`. Pastikan tidak ada alamat yang bertabrakan atau berada di luar kebijakan pool.
@@ -576,7 +576,7 @@ awk '/^lease/{ip=$2} /binding state/{st[ip]=$3} /hardware ethernet/{mac[ip]=$3} 
 
 ---
 
-## 📦 Soal 8: Packet Capture & Analisis Protokol DHCP (DORA)
+## Soal 8: Packet Capture & Analisis Protokol DHCP (DORA)
 
 ### Penyampaian Ulang Soal
 Sebelum Curtain dibuka kembali, buktikan bahwa proses pemberian alamat berjalan sesuai protokol. Lakukan packet capture saat salah satu client Network 2 atau Network 3 meminta lease baru. Gunakan `tcpdump` pada `tengen` atau jalur menuju Data Center untuk menunjukkan urutan DHCPDISCOVER → DHCPOFFER → DHCPREQUEST → DHCPACK. Identifikasi alamat server, alamat yang diberikan, lease time, dan field giaddr. Pastikan nilai giaddr sesuai dengan interface `jichi` yang menerima request dari subnet client.
@@ -611,7 +611,7 @@ tshark -r /root/dora.pcap
 
 ---
 
-## 📦 Soal 9: Simulasi Gangguan Jalur Relay & Pemulihan Layanan
+## Soal 9: Simulasi Gangguan Jalur Relay & Pemulihan Layanan
 
 ### Penyampaian Ulang Soal
 Sebuah gangguan memutus jalur relay dan membuat permintaan alamat tidak sampai ke Data Center. Hentikan service DHCP Relay pada `jichi`, lalu paksa salah satu client di Network 2 atau Network 3 meminta lease baru dan catat gejalanya. Pulihkan service relay, ulangi permintaan DHCP, lalu buktikan bahwa client kembali memperoleh alamat dari pool yang benar dengan gateway semula.
@@ -662,7 +662,7 @@ Menguji respon kegagalan sistem saat perantara relay terputus, memastikan gejala
 
 ---
 
-## 📦 Soal 10: Autostart Layanan & Verifikasi Pasca-Reboot
+## Soal 10: Autostart Layanan & Verifikasi Pasca-Reboot
 
 ### Penyampaian Ulang Soal
 Setelah gangguan Shibuya tertangani, pastikan pemulihan bertahan setelah restart. Aktifkan autostart DHCP Server pada `tengen` dan DHCP Relay pada `jichi`, lalu restart kedua node. Verifikasi status layanan, IP, gateway, lease, dan konektivitas client Network 2–3. Pastikan kebijakan Pool 1, Pool 2, short lease, long lease, dan fixed address tetap berlaku.
