@@ -1319,3 +1319,97 @@ nginx -t && nginx -s reload
   Hasil yang sama diperoleh dari Network 3: path `/` dilayani `maki`/`panda`, sedangkan path `/api` dijawab oleh `nanami`/`todo`. Hal ini membuktikan `gojo` berfungsi sebagai gerbang publik tunggal dengan path-based routing.
 
 ---
+
+
+## Soal 17: Penerusan IP Asli Klien (X-Real-IP & X-Forwarded-For)
+
+### Penyampaian Ulang Soal
+Komando pusat perlu mengetahui IP asli klien yang mengirimkan request tanpa tertukar dengan IP proxy perantara. Konfigurasikan gojo dan geto agar meneruskan informasi alamat klien melalui header X-Real-IP dan X-Forwarded-For. Pastikan geto hanya mempercayai informasi alamat klien yang diterima dari proxy terpercaya, dan skrip API menyimpan alamat klien yang telah diverifikasi ke kolom `client_ip` pada tabel `request_logs` di database yaga. Uji dengan mengirimkan request dari klien Network 2 dan Network 3 ke endpoint `/api`, kemudian periksa database untuk memastikan alamat yang tercatat sesuai dengan IP klien asal, bukan IP gojo atau geto.
+
+### Maksud Soal
+Request API melewati dua proxy (`klien → gojo → geto → worker`). Tanpa konfigurasi tambahan, `geto` hanya melihat IP `gojo` sebagai pengirim, sehingga `client_ip` di database tercatat sebagai `192.213.1.4`. Tujuan soal ini adalah:
+1. **`gojo`** meneruskan IP klien melalui header `X-Real-IP` (`$remote_addr`) dan `X-Forwarded-For` (`$proxy_add_x_forwarded_for`).
+2. **`geto`** menggunakan modul **realip** (`set_real_ip_from` + `real_ip_header`) agar hanya mempercayai header `X-Real-IP` yang datang dari `gojo` (`192.213.1.4`). Header dari sumber lain diabaikan sehingga tidak dapat dipalsukan.
+3. `geto` meneruskan IP klien yang telah diverifikasi ke worker melalui `X-Real-IP`, dan menyusun rantai `X-Forwarded-For` berisi `IP klien, IP gojo`.
+4. **Skrip API** pada worker hanya mempercayai `X-Real-IP` jika request berasal dari `geto` (`192.213.4.20`), lalu menyimpannya ke kolom `client_ip`.
+
+### Cara Mengerjakan
+#### 1. Header pada `gojo`
+Sudah diterapkan sejak Soal 14/16 pada setiap blok `location`:
+```nginx
+proxy_set_header X-Real-IP         $remote_addr;
+proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+```
+
+#### 2. Proxy terpercaya pada `geto`
+Berkas `/etc/nginx/sites-available/geto`:
+```nginx
+# Rantai X-Forwarded-For yang rapi: "IP klien, IP gojo"
+map $http_x_forwarded_for $xff_chain {
+    ""      $realip_remote_addr;
+    default "$http_x_forwarded_for, $realip_remote_addr";
+}
+
+upstream api_cluster {
+    zone api_cluster 64k;
+    server 192.213.4.41 weight=3;   # nanami
+    server 192.213.4.42 weight=1;   # todo
+}
+
+server {
+    listen 80 default_server;
+    server_name _;
+
+    # Hanya percaya header IP klien dari gojo (proxy terpercaya)
+    set_real_ip_from 192.213.1.4;
+    real_ip_header   X-Real-IP;
+
+    location / {
+        proxy_pass http://api_cluster;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $xff_chain;
+    }
+}
+```
+```bash
+nginx -t && nginx -s reload
+```
+
+#### 3. Verifikasi sumber pada skrip API (worker)
+Potongan `/var/www/api/index.php` (dari Soal 14):
+```php
+$remote = $_SERVER['REMOTE_ADDR'] ?? '';
+$client = $remote;
+// IP klien asli hanya dipercaya jika request datang dari geto
+if ($remote === '192.213.4.20' && !empty($_SERVER['HTTP_X_REAL_IP'])) {
+    $client = $_SERVER['HTTP_X_REAL_IP'];
+}
+```
+
+### Cara Melakukan Validasi
+* Konfigurasi proxy terpercaya di `geto`:
+
+  ![Konfigurasi realip geto](assets/m3_langkah_17.1.png)
+
+  Konfigurasi valid dan dimuat ulang. `geto` hanya mempercayai header `X-Real-IP` dari `192.213.1.4` (gojo), lalu meneruskan IP terverifikasi beserta rantai `X-Forwarded-For` ke worker.
+
+* Pengujian dari client Network 2 (`itadori`):
+
+  ![Pengujian dari itadori](assets/m3_langkah_17.2.png)
+
+  Request ke `/api` melalui `gojo` menghasilkan `client_ip` `192.213.2.10` (IP asli itadori) dengan `forwarded_for` `192.213.2.10, 192.213.1.4`. Pada uji pemalsuan, request langsung ke `geto` dengan header `X-Real-IP: 6.6.6.6` tetap tercatat sebagai `192.213.2.10`, membuktikan header dari sumber tidak terpercaya diabaikan.
+
+* Pengujian dari client Network 3 (`ino`):
+
+  ![Pengujian dari ino](assets/m3_langkah_17.3.png)
+
+  Request ke `/api` dari `ino` menghasilkan `client_ip` `192.213.3.10` (IP asli ino).
+
+* Pemeriksaan database di `yaga`:
+
+  ![client_ip di database](assets/m3_langkah_17.4.png)
+
+  Tabel `request_logs` mencatat `client_ip` `192.213.3.10` dan `192.213.2.10` sesuai IP klien asal. Tidak ada request terbaru yang tercatat dengan IP `gojo` (`192.213.1.4`) maupun `geto` (`192.213.4.20`).
+
+---
