@@ -1572,3 +1572,106 @@ nginx -t && nginx -s reload
   Request yang ditolak tercatat dengan `status=429 upstream=-`, menandakan request dihentikan langsung oleh `gojo` tanpa diteruskan ke `geto`. Request yang lolos tercatat `status=200 upstream=192.213.4.20:80 upstream_status=200`.
 
 ---
+
+## Soal 20: Uji Beban dengan Apache Benchmark & Analisis Access Log
+
+### Penyampaian Ulang Soal
+Sebelum Curtain di Shibuya resmi dibuka, Kusakabe memimpin audit untuk menguji kapasitas layanan. Dari terminal kusakabe, jalankan benchmark menggunakan Apache Benchmark dengan parameter `-n 600 -c 30` menuju `http://jujutsu.k04.com/`. Catat Requests per Second (RPS), latensi, dan jumlah request yang gagal. Lakukan pengujian tambahan pada endpoint `/api` untuk mengamati efek rate limiting. Bandingkan hasil pengujian baseline dengan hasil ketika rate limiting aktif, serta gunakan access log gojo untuk membedakan kegagalan aplikasi, koneksi, dan request yang ditolak oleh kebijakan rate limit.
+
+### Maksud Soal
+Tujuan soal ini adalah mengukur kapasitas layanan dari sisi klien `kusakabe` (`192.213.3.11`) dan menganalisis perilakunya dari sisi `gojo`:
+1. **Apache Benchmark** (`ab -n 600 -c 30`) mengirim 600 request dengan 30 request konkuren. Parameter `-l` digunakan agar perbedaan panjang respons antar worker (`maki`/`panda`) tidak dihitung sebagai kegagalan.
+2. Metrik yang dicatat: **Requests per Second** (throughput), **Time per request** (latensi rata-rata) beserta persentil, **Failed requests** (kegagalan koneksi/transport), dan **Non-2xx responses** (respons selain 2xx, misalnya 429).
+3. Pengujian `/api` dilakukan dua kali, yaitu **baseline** (rate limit dinonaktifkan sementara) dan **rate limit aktif**, untuk melihat efek kebijakan 10 r/s.
+4. Access log `gojo` (format `gojo_log` dari Soal 19) digunakan untuk mengklasifikasikan setiap request:
+
+| Kategori | Ciri pada access log `gojo` |
+|---|---|
+| Ditolak rate limit | `status=429 upstream=-` (dihentikan di `gojo`, tidak diteruskan ke backend) |
+| Kegagalan koneksi | `status=502`/`504` dengan error.log `connect() failed` / `upstream timed out` |
+| Kegagalan aplikasi | backend terhubung namun membalas error, `upstream_status=500`/`503` |
+
+### Cara Mengerjakan
+Persiapan klien `kusakabe`:
+```bash
+udhcpc -i eth0 -n -q
+apk add apache2-utils curl
+```
+
+Script analisis `/root/analisis_log.sh` pada `gojo`:
+```bash
+L=/var/log/nginx/gojo_access.log
+echo "Total request tercatat : $(wc -l < $L)"
+grep -o ' status=[0-9]*' $L | sort | uniq -c
+echo "Sukses (200)                               : $(grep -c ' status=200 ' $L)"
+echo "Dilayani dari cache (HIT)                  : $(grep -c 'cache=HIT' $L)"
+echo "Ditolak rate limit (429, upstream=-)       : $(grep -c ' status=429 upstream=-' $L)"
+echo "Gagal koneksi ke upstream (502/504)        : $(grep -cE ' status=50[24] ' $L)"
+echo "Gagal aplikasi (upstream membalas 500/503) : $(grep -cE 'upstream_status=50[03]' $L)"
+```
+
+Setiap pengujian dilakukan dengan pola: kosongkan access log di `gojo`, jalankan `ab` di `kusakabe`, lalu analisis log di `gojo`:
+```bash
+: > /var/log/nginx/gojo_access.log                  # gojo
+ab -n 600 -c 30 -l http://jujutsu.k04.com/           # kusakabe (web)
+ab -n 600 -c 30 -l http://jujutsu.k04.com/api        # kusakabe (api)
+bash /root/analisis_log.sh                           # gojo
+```
+
+Rate limit dinonaktifkan sementara untuk baseline `/api`, lalu diaktifkan kembali:
+```bash
+# nonaktifkan
+sed -i 's/^\(\s*\)limit_req zone=api_limit;/\1# limit_req zone=api_limit;/' /etc/nginx/sites-available/gojo && nginx -s reload
+# aktifkan kembali
+sed -i 's/# limit_req zone=api_limit;/limit_req zone=api_limit;/' /etc/nginx/sites-available/gojo && nginx -s reload
+```
+
+### Hasil Pengujian
+
+| Metrik | Web `/` | `/api` baseline (tanpa rate limit) | `/api` rate limit aktif |
+|---|---|---|---|
+| Complete requests | 600 | 600 | 600 |
+| Requests per second | ___ | ___ | ___ |
+| Time per request (mean) | ___ ms | ___ ms | ___ ms |
+| Latensi 95% | ___ ms | ___ ms | ___ ms |
+| Failed requests | ___ | ___ | ___ |
+| Non-2xx responses | - | - | ___ |
+| Status di log `gojo` | 600 × 200 (600 HIT) | 600 × 200 | 1 × 200, 599 × 429 |
+
+**Analisis:**
+1. **Web `/`** memiliki throughput tertinggi dan latensi terendah karena seluruh 600 request dilayani dari **proxy cache** `gojo` (`cache=HIT`), tanpa membebani `maki`/`panda`.
+2. **`/api` baseline** memiliki RPS lebih rendah dan latensi lebih tinggi karena setiap request diteruskan `gojo → geto → nanami/todo`, menjalankan PHP, dan menulis ke database `yaga`. Seluruh request berhasil (600 × 200) tanpa kegagalan.
+3. **`/api` dengan rate limit** menghasilkan 599 respons `429` dan hanya 1 request yang diteruskan ke backend. RPS terlihat sangat tinggi dan latensi sangat rendah karena request langsung ditolak oleh `gojo`, bukan karena backend lebih cepat. `Failed requests` tetap 0 karena penolakan rate limit adalah respons HTTP yang valid, bukan kegagalan koneksi.
+
+### Cara Melakukan Validasi
+* Persiapan client `kusakabe`:
+
+  ![Persiapan kusakabe](assets/m3_langkah_20.1.png)
+
+  `kusakabe` memperoleh IP `192.213.3.11` dari DHCP, `ab` (ApacheBench 2.3) terpasang, dan akses ke `http://jujutsu.k04.com/` berhasil.
+
+* Uji beban web utama `/`:
+
+  ![ab web utama](assets/m3_langkah_20.2.png)
+
+  Seluruh 600 request berhasil tanpa kegagalan. Access log `gojo` mencatat 600 × `status=200` dan seluruhnya `cache=HIT`.
+
+* Uji beban `/api` baseline (tanpa rate limit):
+
+  ![ab api baseline](assets/m3_langkah_20.3.png)
+
+  Seluruh 600 request diteruskan ke backend dan berhasil dengan `status=200`, tanpa penolakan maupun kegagalan.
+
+* Uji beban `/api` dengan rate limit aktif:
+
+  ![ab api rate limit](assets/m3_langkah_20.4.png)
+
+  Access log `gojo` mencatat 1 × `status=200` dan 599 × `status=429` dengan `upstream=-`, menandakan request ditolak oleh kebijakan rate limit di `gojo` tanpa diteruskan ke backend.
+
+* Pembedaan kegagalan koneksi:
+
+  ![Kegagalan koneksi](assets/m3_langkah_20.5.png)
+
+  Saat Nginx pada `geto` dihentikan, request `/api` menghasilkan `status=502` dan error.log `gojo` mencatat `connect() failed (111: Connection refused) while connecting to upstream`. Ini adalah **kegagalan koneksi**, berbeda dengan `429` yang merupakan **penolakan kebijakan rate limit**. Tidak ditemukan **kegagalan aplikasi** (`upstream_status=500/503`) selama pengujian.
+
+---
