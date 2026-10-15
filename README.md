@@ -1413,3 +1413,75 @@ if ($remote === '192.213.4.20' && !empty($_SERVER['HTTP_X_REAL_IP'])) {
   Tabel `request_logs` mencatat `client_ip` `192.213.3.10` dan `192.213.2.10` sesuai IP klien asal. Tidak ada request terbaru yang tercatat dengan IP `gojo` (`192.213.1.4`) maupun `geto` (`192.213.4.20`).
 
 ---
+
+## Soal 18: Worker Backup & Passive Health Check
+
+### Penyampaian Ulang Soal
+nanami dan todo merupakan worker API utama, sedangkan kirara disiapkan sebagai worker cadangan. Konfigurasikan upstream `api_cluster` pada geto agar kirara menjadi server backup, serta terapkan passive health check dengan parameter `max_fails=2` dan `fail_timeout=5s` pada worker API utama. Pastikan kirara menjalankan layanan API yang kompatibel dengan endpoint utama. Simulasikan gangguan dengan menghentikan layanan Nginx atau layanan API pada nanami dan todo. Buktikan dari klien bahwa request ke `/api` dialihkan ke kirara dan menghasilkan respons API yang valid tanpa error 502 Bad Gateway.
+
+### Maksud Soal
+Tujuan soal ini adalah menambahkan mekanisme **high availability** pada load balancer `geto`:
+1. `kirara` (`192.213.4.43`) ditandai sebagai **`backup`**, sehingga hanya menerima request ketika seluruh worker utama tidak tersedia.
+2. **Passive health check** `max_fails=2 fail_timeout=5s` pada `nanami` dan `todo`: jika sebuah worker gagal 2 kali dalam rentang 5 detik, worker tersebut dianggap tidak tersedia selama 5 detik sebelum dicoba kembali.
+3. **`proxy_next_upstream`** membuat `geto` langsung mencoba worker berikutnya ketika terjadi error koneksi, timeout, atau respons 502/503/504, sehingga klien tidak menerima error 502 Bad Gateway.
+4. `kirara` menjalankan skrip API yang sama dengan worker utama (Soal 14), sehingga respons tetap valid dan tetap mencatat log ke database.
+
+### Cara Mengerjakan
+Perubahan upstream dan location pada `/etc/nginx/sites-available/geto`:
+```nginx
+upstream api_cluster {
+    zone api_cluster 64k;
+    server 192.213.4.41 weight=3 max_fails=2 fail_timeout=5s;   # nanami (utama)
+    server 192.213.4.42 weight=1 max_fails=2 fail_timeout=5s;   # todo   (utama)
+    server 192.213.4.43 backup;                                 # kirara (cadangan)
+}
+
+location / {
+    proxy_pass http://api_cluster;
+    proxy_set_header Host              $host;
+    proxy_set_header X-Real-IP         $remote_addr;
+    proxy_set_header X-Forwarded-For   $xff_chain;
+    proxy_next_upstream error timeout http_502 http_503 http_504;
+}
+```
+```bash
+nginx -t && nginx -s reload
+```
+
+Simulasi gangguan pada `nanami` dan `todo`:
+```bash
+service nginx stop
+```
+
+### Cara Melakukan Validasi
+* Konfigurasi backup dan health check di `geto`:
+
+  ![Konfigurasi backup geto](assets/m3_langkah_18.1.png)
+
+  Konfigurasi valid. `nanami` dan `todo` memiliki parameter `max_fails=2 fail_timeout=5s`, `kirara` ditandai `backup`, dan `proxy_next_upstream` aktif.
+
+* Kondisi normal dari client `itadori`:
+
+  ![Kondisi normal](assets/m3_langkah_18.2.png)
+
+  Seluruh request `/api` dilayani oleh `nanami` dan `todo` (rasio 3:1) dengan HTTP 200. `kirara` tidak menerima request karena berstatus cadangan.
+
+* Simulasi gangguan pada worker utama:
+
+  ![Nginx nanami dan todo dihentikan](assets/m3_langkah_18.3.png)
+
+  Layanan Nginx pada `nanami` dan `todo` dihentikan menggunakan `service nginx stop`.
+
+* Pengalihan ke worker backup:
+
+  ![Failover ke kirara](assets/m3_langkah_18.4.png)
+
+  Saat kedua worker utama mati, seluruh request `/api` dari `itadori` dialihkan ke `kirara` dengan HTTP 200 tanpa error 502 Bad Gateway. Respons JSON tetap valid dengan `client_ip` klien asli dan `"logged":true`.
+
+* Pemulihan worker utama:
+
+  ![Pemulihan worker utama](assets/m3_langkah_18.5.png)
+
+  Setelah Nginx pada `nanami` dan `todo` dinyalakan kembali dan melewati `fail_timeout` 5 detik, request kembali dilayani oleh worker utama dan `kirara` kembali menganggur.
+
+---
