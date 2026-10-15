@@ -718,3 +718,110 @@ Memastikan seluruh konfigurasi jaringan, routing, dan layanan DHCP bersifat pers
   ![Pengujian ulang fixed IP kugisaki pasca restart](assets/Screenshot%202026-10-12%20203716.png)
   
   Pengujian renew lease pada node VIP `kugisaki` setelah restart. Reservasi alamat tetap konsisten menghasilkan IP `192.213.3.99` dengan lease time 600 detik sesuai deklarasi statis.
+
+## Soal 11: DNS Master (Utahime) & DNS Slave (Shoko)
+
+### Penyampaian Ulang Soal
+Utahime dan Shoko ditugaskan membangun sistem penamaan domain resmi agar seluruh pos tidak perlu menghafal alamat IP mentah. Konfigurasikan BIND9 pada utahime sebagai DNS Master dan shoko sebagai DNS Slave untuk mengelola domain `jujutsu.k04.com`. Atur SOA record, NS delegasi untuk kedua server, dan terapkan allow-transfer dari Master ke Slave. Pastikan file zona berhasil tersinkronisasi otomatis ke shoko saat nomor serial di utahime dinaikkan, lalu buktikan dengan melakukan query dig ke kedua server dari salah satu client.
+
+### Maksud Soal
+Tujuan soal ini adalah membangun layanan DNS yang redundan untuk domain `jujutsu.k04.com`:
+1. `utahime` (`192.213.1.2`) menjadi **DNS Master** yang menyimpan file zona asli, berisi SOA record dan NS record untuk `ns1` (utahime) dan `ns2` (shoko).
+2. `shoko` (`192.213.1.3`) menjadi **DNS Slave** yang tidak menulis zona sendiri, melainkan menyalin zona dari master melalui *zone transfer* (AXFR/IXFR).
+3. Master hanya mengizinkan transfer ke shoko (`allow-transfer`) dan mengirim pemberitahuan (`also-notify` + `notify yes`) setiap kali zona berubah, sehingga slave langsung tersinkron ketika **nomor serial** dinaikkan.
+
+### Cara Mengerjakan
+#### 1. Konfigurasi DNS Master (`utahime`)
+```bash
+apt update && apt install bind9 dnsutils -y
+```
+
+Berkas `/etc/bind/named.conf.local`:
+```
+zone "jujutsu.k04.com" {
+    type master;
+    file "/etc/bind/jujutsu/jujutsu.k04.com";
+    allow-transfer { 192.213.1.3; };   // hanya shoko yang boleh menyalin zona
+    also-notify { 192.213.1.3; };      // kabari shoko setiap ada perubahan
+    notify yes;
+};
+```
+
+Berkas zona `/etc/bind/jujutsu/jujutsu.k04.com`:
+```
+$TTL    604800
+@       IN      SOA     ns1.jujutsu.k04.com. admin.jujutsu.k04.com. (
+                        2026101501 ; Serial
+                        604800     ; Refresh
+                        86400      ; Retry
+                        2419200    ; Expire
+                        604800 )   ; Negative Cache TTL
+@       IN      NS      ns1.jujutsu.k04.com.
+@       IN      NS      ns2.jujutsu.k04.com.
+ns1     IN      A       192.213.1.2
+ns2     IN      A       192.213.1.3
+```
+
+Validasi dan restart service:
+```bash
+named-checkconf && named-checkzone jujutsu.k04.com /etc/bind/jujutsu/jujutsu.k04.com
+service named restart
+```
+
+#### 2. Konfigurasi DNS Slave (`shoko`)
+Berkas `/etc/bind/named.conf.local`:
+```
+zone "jujutsu.k04.com" {
+    type slave;
+    masters { 192.213.1.2; };              // salin dari utahime
+    file "/var/lib/bind/jujutsu.k04.com";  // hasil salinan zona
+};
+```
+```bash
+named-checkconf
+service named restart
+```
+
+#### 3. Uji Sinkronisasi Otomatis (menaikkan serial di `utahime`)
+Serial dinaikkan dari `2026101501` menjadi `2026101502`, lalu ditambahkan dua record baru:
+```bash
+sed -i 's/2026101501/2026101502/' /etc/bind/jujutsu/jujutsu.k04.com
+cat >> /etc/bind/jujutsu/jujutsu.k04.com <<'EOF'
+utahime IN      A       192.213.1.2
+shoko   IN      A       192.213.1.3
+EOF
+named-checkzone jujutsu.k04.com /etc/bind/jujutsu/jujutsu.k04.com && service named restart
+```
+
+### Cara Melakukan Validasi
+* Pemasangan zona master di `utahime`:
+
+  ![Zona master utahime](assets/langkah_11.1.png)
+
+  Output `named-checkzone` menunjukkan zona `jujutsu.k04.com` berhasil dimuat dengan serial `2026101501` (`OK`), dan service `named` berhasil dijalankan.
+
+* Zone transfer ke `shoko`:
+
+  ![Zona slave shoko](assets/langkah_11.2.png)
+
+  Setelah service `named` di `shoko` dijalankan, berkas `/var/lib/bind/jujutsu.k04.com` milik user `bind` terbentuk otomatis. Ini membuktikan shoko berhasil menyalin zona dari utahime melalui zone transfer.
+
+* Query `dig` dari client `itadori` ke kedua server:
+
+  ![dig SOA dan NS dari itadori](assets/langkah_11.3.png)
+
+  Query SOA ke `192.213.1.2` (master) dan `192.213.1.3` (slave) menghasilkan record yang identik dengan serial `2026101501`, sedangkan query NS menampilkan `ns1.jujutsu.k04.com.` dan `ns2.jujutsu.k04.com.` sebagai name server domain.
+
+* Menaikkan serial di `utahime`:
+
+  ![Serial dinaikkan di utahime](assets/langkah_11.4.png)
+
+  Zona dimuat ulang dengan serial `2026101502` beserta dua record A baru (`utahime` dan `shoko`), lalu service `named` di-restart sehingga utahime mengirim NOTIFY ke shoko.
+
+* Verifikasi sinkronisasi otomatis di `shoko` dari client `itadori`:
+
+  ![Slave ikut ter-update](assets/langkah_11.5.png)
+
+  Tanpa melakukan perubahan apa pun di `shoko`, query ke `192.213.1.3` sudah menampilkan serial `2026101502`, serta record `utahime.jujutsu.k04.com` (`192.213.1.2`) dan `shoko.jujutsu.k04.com` (`192.213.1.3`). Ini membuktikan file zona tersinkronisasi otomatis dari master ke slave saat serial dinaikkan.
+
+---
