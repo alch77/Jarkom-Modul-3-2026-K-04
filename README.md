@@ -1040,3 +1040,195 @@ START SLAVE;
   Dari `inumaki` (`192.213.4.52`), user `jujutsu` berhasil login ke MariaDB `yaga` secara remote dengan `CURRENT_USER()` bernilai `jujutsu@192.213.4.%`. Ini membuktikan hak akses remote telah diberikan untuk seluruh node di Network 4.
 
 ---
+
+
+
+
+
+## Soal 14: Worker Web & API dengan Pembatasan Akses
+
+### Penyampaian Ulang Soal
+Para penyihir lapangan bersiaga di Data Center sebagai pekerja backend untuk memproses aplikasi. Pasang Nginx dan PHP-FPM pada maki dan panda untuk menyajikan web frontend yang menampilkan hostname masing-masing. Pada nanami, todo, dan kirara, siapkan layanan API yang mencatat log request ke database yaga. Konfigurasikan virtual host agar worker merespons domain layanan yang ditentukan. Batasi akses langsung dari klien ke worker, web worker hanya menerima trafik melalui jalur proxy web yang ditentukan, sedangkan worker API hanya menerima trafik melalui geto. Uji bahwa akses langsung dari klien ditolak, sementara akses melalui reverse proxy tetap berhasil.
+
+### Maksud Soal
+Tujuan soal ini adalah membangun lapisan backend yang hanya dapat dijangkau melalui reverse proxy:
+1. **Web worker** `maki` (`192.213.4.31`) dan `panda` (`192.213.4.32`) menjalankan Nginx + PHP-FPM dan menampilkan hostname masing-masing, sehingga terlihat worker mana yang melayani request.
+2. **API worker** `nanami` (`192.213.4.41`), `todo` (`192.213.4.42`), dan `kirara` (`192.213.4.43`) menjalankan script PHP yang mengembalikan respons JSON dan mencatat setiap request (worker, IP klien, header X-Forwarded-For, path) ke tabel `request_logs` di database `yaga`.
+3. Seluruh worker menggunakan **virtual host** dengan `server_name jujutsu.k04.com www.jujutsu.k04.com`.
+4. **Pembatasan akses** dengan direktif `allow`/`deny` Nginx: web worker hanya menerima trafik dari `gojo` (`192.213.1.4`), sedangkan API worker hanya menerima trafik dari `geto` (`192.213.4.20`). Akses langsung dari klien mendapat respons `403 Forbidden`.
+5. `geto` dan `gojo` dikonfigurasi sebagai reverse proxy dasar untuk membuktikan bahwa akses melalui jalur proxy tetap berhasil.
+
+### Cara Mengerjakan
+#### 1. Web Worker (`maki`, `panda`)
+```bash
+apt-get update -y && apt-get install -y nginx php-fpm php-mysql curl
+```
+
+Berkas `/var/www/web/index.php`:
+```php
+<?php
+echo "<h1>Frontend Jujutsu High dilayani oleh: " . gethostname() . "</h1>\n";
+```
+
+Virtual host `/etc/nginx/sites-available/jujutsu`:
+```nginx
+server {
+    listen 80 default_server;
+    server_name jujutsu.k04.com www.jujutsu.k04.com;
+    root /var/www/web;
+    index index.php;
+
+    allow 192.213.1.4;   # hanya gojo (reverse proxy web)
+    allow 127.0.0.1;
+    deny  all;
+
+    location / {
+        try_files $uri $uri/ /index.php;
+    }
+    location ~ \.php$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/php8.4-fpm.sock;
+    }
+}
+```
+
+#### 2. API Worker (`nanami`, `todo`, `kirara`)
+Berkas `/var/www/api/index.php` mencatat setiap request ke database `db_shibuya_k04` di `yaga` menggunakan user `jujutsu` (akses remote Network 4 dari Soal 13), lalu mengembalikan respons JSON:
+```php
+<?php
+header('Content-Type: application/json');
+$worker = gethostname();
+$remote = $_SERVER['REMOTE_ADDR'] ?? '';
+$client = $remote;
+// IP klien asli hanya dipercaya jika request datang dari geto
+if ($remote === '192.213.4.20' && !empty($_SERVER['HTTP_X_REAL_IP'])) {
+    $client = $_SERVER['HTTP_X_REAL_IP'];
+}
+$xff  = $_SERVER['HTTP_X_FORWARDED_FOR'] ?? '';
+$path = $_SERVER['REQUEST_URI'] ?? '/';
+$logged = false;
+try {
+    $db = new PDO('mysql:host=192.213.4.51;dbname=db_shibuya_k04;charset=utf8mb4',
+                  'jujutsu', 'jujutsu123',
+                  [PDO::ATTR_TIMEOUT => 2, PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+    $st = $db->prepare('INSERT INTO request_logs (worker, client_ip, forwarded_for, path) VALUES (?, ?, ?, ?)');
+    $st->execute([$worker, $client, $xff, $path]);
+    $logged = true;
+} catch (Throwable $e) {
+    $logged = false;
+}
+echo json_encode(['status' => 'ok', 'worker' => $worker, 'client_ip' => $client,
+                  'forwarded_for' => $xff, 'path' => $path, 'logged' => $logged]), "\n";
+```
+
+Virtual host `/etc/nginx/sites-available/jujutsu`:
+```nginx
+server {
+    listen 80 default_server;
+    server_name jujutsu.k04.com www.jujutsu.k04.com;
+    root /var/www/api;
+
+    allow 192.213.4.20;  # hanya geto (load balancer API)
+    allow 127.0.0.1;
+    deny  all;
+
+    location / {
+        rewrite ^ /index.php last;
+    }
+    location ~ \.php$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/php8.4-fpm.sock;
+    }
+}
+```
+
+#### 3. Reverse Proxy Dasar (`geto` dan `gojo`)
+`geto` meneruskan request ke ketiga API worker:
+```nginx
+upstream api_cluster {
+    zone api_cluster 64k;
+    server 192.213.4.41;   # nanami
+    server 192.213.4.42;   # todo
+    server 192.213.4.43;   # kirara
+}
+server {
+    listen 80 default_server;
+    server_name _;
+    location / {
+        proxy_pass http://api_cluster;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    }
+}
+```
+
+`gojo` meneruskan request domain `jujutsu.k04.com` ke kedua web worker:
+```nginx
+upstream web_frontend {
+    zone web_frontend 64k;
+    server 192.213.4.31;   # maki
+    server 192.213.4.32;   # panda
+}
+server {
+    listen 80 default_server;
+    server_name jujutsu.k04.com www.jujutsu.k04.com;
+    location / {
+        proxy_pass http://web_frontend;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    }
+}
+```
+
+### Cara Melakukan Validasi
+* Web worker `maki` dan `panda`:
+
+  ![Web worker maki](assets/m3_langkah_14.1.png)
+
+  ![Web worker panda](assets/m3_langkah_14.2.png)
+
+  Konfigurasi Nginx valid (`test is successful`) dan akses lokal menampilkan halaman PHP berisi hostname masing-masing worker.
+
+* API worker `nanami`, `todo`, dan `kirara`:
+
+  ![API worker nanami](assets/m3_langkah_14.3.png)
+
+  ![API worker todo](assets/m3_langkah_14.4.png)
+
+  ![API worker kirara](assets/m3_langkah_14.5.png)
+
+  Setiap API worker mengembalikan respons JSON dengan nama worker masing-masing dan `"logged":true`, menandakan log request berhasil ditulis ke database `yaga`.
+
+* Proxy `geto` ke API worker:
+
+  ![geto ke API worker](assets/m3_langkah_14.6.png)
+
+  Request dari `geto` diteruskan bergantian ke `nanami`, `todo`, dan `kirara`, dan diterima karena berasal dari IP yang diizinkan (`192.213.4.20`).
+
+* Proxy `gojo` ke web worker:
+
+  ![gojo ke web worker](assets/m3_langkah_14.7.png)
+
+  Request domain `jujutsu.k04.com` pada `gojo` diteruskan bergantian ke `maki` dan `panda`.
+
+* Akses langsung dari client `itadori` ke worker:
+
+  ![Akses langsung ditolak](assets/m3_langkah_14.8.png)
+
+  Seluruh akses langsung dari `itadori` (`192.213.2.10`) ke kelima worker menghasilkan HTTP `403 Forbidden`, karena IP klien tidak termasuk dalam daftar `allow`.
+
+* Akses melalui reverse proxy dari client `itadori`:
+
+  ![Akses lewat proxy berhasil](assets/m3_langkah_14.9.png)
+
+  Akses `http://jujutsu.k04.com/` melalui `gojo` berhasil dan dilayani bergantian oleh `maki` dan `panda`. Akses API melalui `geto` (`192.213.4.20`) berhasil dan dilayani bergantian oleh `nanami`, `todo`, dan `kirara`, dengan `client_ip` tercatat sebagai IP asli klien (`192.213.2.10`).
+
+* Log request di database `yaga`:
+
+  ![Log request di yaga](assets/m3_langkah_14.10.png)
+
+  Tabel `request_logs` berisi catatan request dari ketiga API worker dengan `client_ip` `192.213.2.10`, membuktikan API worker mencatat log request ke database terpusat.
+
+---
