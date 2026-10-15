@@ -933,3 +933,110 @@ named-checkconf && service named restart
   Berkas `/etc/resolv.conf` pada `itadori` hanya berisi DNS internal (`192.213.1.2` dan `192.213.1.3`), namun `ping -c 3 google.com` tetap berhasil dengan 0% packet loss. Hal ini membuktikan query domain internet diteruskan oleh BIND9 ke forwarder `192.168.122.1`.
 
 ---
+## Soal 13: Replikasi Database MariaDB (Yaga Master & Inumaki Slave)
+
+### Penyampaian Ulang Soal
+Kepala Sekolah Yaga dan Inumaki mendirikan database terpusat yang redundan agar log aktivitas kutukan tetap aman tersimpan. Konfigurasikan MariaDB pada yaga sebagai DB-Master dan inumaki sebagai DB-Slave. Buat database `db_shibuya_k04` beserta tabel `request_logs` di Master, aktifkan binary logging (log-bin, server-id), lalu hubungkan inumaki sebagai Slave yang menyalin data secara realtime dengan `CHANGE MASTER TO`. Berikan hak akses remote bagi seluruh node di Network 4, lalu buktikan replikasi berhasil dengan memasukkan data baru di Master dan memeriksa hasilnya di Slave.
+
+### Maksud Soal
+Tujuan soal ini adalah membangun database terpusat yang redundan untuk menyimpan log request aplikasi:
+1. `yaga` (`192.213.4.51`) menjadi **DB-Master** dengan `server-id = 1` dan **binary log** aktif (`log_bin`). Binary log mencatat setiap perubahan data sehingga dapat dibaca oleh slave.
+2. Database `db_shibuya_k04` dan tabel `request_logs` dibuat di master. Tabel ini akan digunakan oleh worker API pada soal berikutnya untuk mencatat request.
+3. `inumaki` (`192.213.4.52`) menjadi **DB-Slave** dengan `server-id = 2`, lalu dihubungkan ke master menggunakan `CHANGE MASTER TO` agar menyalin perubahan secara realtime.
+4. User aplikasi `jujutsu` diberi akses dari `192.213.4.%` sehingga seluruh node di Network 4 (worker API, load balancer) dapat terhubung secara remote.
+
+### Cara Mengerjakan
+#### 1. Konfigurasi DB-Master (`yaga`)
+```bash
+apt-get update -y && apt-get install -y mariadb-server mariadb-client
+```
+
+Berkas `/etc/mysql/mariadb.conf.d/60-replikasi.cnf`:
+```
+[mysqld]
+bind-address = 0.0.0.0
+server-id    = 1
+log_bin      = mysql-bin
+skip-name-resolve = 1
+```
+- `bind-address = 0.0.0.0` agar MariaDB menerima koneksi dari jaringan, tidak hanya localhost.
+- `server-id = 1` sebagai identitas unik master.
+- `log_bin = mysql-bin` mengaktifkan binary log.
+- `skip-name-resolve = 1` agar MariaDB tidak melakukan reverse lookup nama host klien, sehingga koneksi dari slave dan worker tidak tertahan timeout DNS.
+
+Inisialisasi user, database, dan tabel (dijalankan setelah binary log aktif agar ikut tereplikasi ke slave):
+```sql
+CREATE USER IF NOT EXISTS 'repl'@'%' IDENTIFIED BY 'repl123';
+GRANT REPLICATION SLAVE ON *.* TO 'repl'@'%';
+
+CREATE DATABASE IF NOT EXISTS db_shibuya_k04;
+CREATE USER IF NOT EXISTS 'jujutsu'@'192.213.4.%' IDENTIFIED BY 'jujutsu123';
+GRANT ALL PRIVILEGES ON db_shibuya_k04.* TO 'jujutsu'@'192.213.4.%';
+FLUSH PRIVILEGES;
+
+USE db_shibuya_k04;
+CREATE TABLE IF NOT EXISTS request_logs (
+    id            INT AUTO_INCREMENT PRIMARY KEY,
+    worker        VARCHAR(50),
+    client_ip     VARCHAR(45),
+    forwarded_for VARCHAR(255),
+    path          VARCHAR(255),
+    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+#### 2. Konfigurasi DB-Slave (`inumaki`)
+Berkas `/etc/mysql/mariadb.conf.d/60-replikasi.cnf`:
+```
+[mysqld]
+bind-address = 0.0.0.0
+server-id    = 2
+relay_log    = relay-bin
+read_only    = 1
+```
+
+Menghubungkan slave ke master, membaca binary log dari awal (`mysql-bin.000001` posisi `4`):
+```sql
+STOP SLAVE;
+CHANGE MASTER TO
+    MASTER_HOST='192.213.4.51',
+    MASTER_USER='repl',
+    MASTER_PASSWORD='repl123',
+    MASTER_LOG_FILE='mysql-bin.000001',
+    MASTER_LOG_POS=4,
+    MASTER_SSL=0;
+START SLAVE;
+```
+
+### Cara Melakukan Validasi
+* Konfigurasi master di `yaga`:
+
+  ![Status master yaga](assets/langkah_13.1.png)
+
+  `SHOW MASTER STATUS` menunjukkan binary log aktif pada berkas `mysql-bin.000001`. Database `db_shibuya_k04`, user `repl` (`%`) dan `jujutsu` (`192.213.4.%`), serta struktur tabel `request_logs` telah terbentuk.
+
+* Status replikasi di `inumaki`:
+
+  ![Status slave inumaki](assets/langkah_13.2.png)
+
+  `SHOW SLAVE STATUS` menampilkan `Master_Host: 192.213.4.51`, `Slave_IO_Running: Yes`, dan `Slave_SQL_Running: Yes` tanpa error. Database `db_shibuya_k04` dan tabel `request_logs` muncul di inumaki tanpa dibuat manual, yang membuktikan keduanya tersalin dari binary log master.
+
+* Memasukkan data baru di master `yaga`:
+
+  ![Insert data di yaga](assets/langkah_13.3.png)
+
+  Data uji dengan `worker = 'yaga-test'` dan `path = '/uji-replikasi'` dimasukkan ke tabel `request_logs` pada master.
+
+* Pengecekan data di slave `inumaki`:
+
+  ![Data tereplikasi di inumaki](assets/langkah_13.4.png)
+
+  Baris yang sama langsung muncul pada tabel `request_logs` di inumaki tanpa ada INSERT di slave. Hal ini membuktikan replikasi master–slave berjalan secara realtime.
+
+* Akses remote dari Network 4:
+
+  ![Login remote user jujutsu](assets/langkah_13.5.png)
+
+  Dari `inumaki` (`192.213.4.52`), user `jujutsu` berhasil login ke MariaDB `yaga` secara remote dengan `CURRENT_USER()` bernilai `jujutsu@192.213.4.%`. Ini membuktikan hak akses remote telah diberikan untuk seluruh node di Network 4.
+
+---
