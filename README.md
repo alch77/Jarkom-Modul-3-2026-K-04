@@ -825,3 +825,111 @@ named-checkzone jujutsu.k04.com /etc/bind/jujutsu/jujutsu.k04.com && service nam
   Tanpa melakukan perubahan apa pun di `shoko`, query ke `192.213.1.3` sudah menampilkan serial `2026101502`, serta record `utahime.jujutsu.k04.com` (`192.213.1.2`) dan `shoko.jujutsu.k04.com` (`192.213.1.3`). Ini membuktikan file zona tersinkronisasi otomatis dari master ke slave saat serial dinaikkan.
 
 ---
+
+## Soal 12: A Record, CNAME, Reverse DNS, dan DNS Forwarder
+
+### Penyampaian Ulang Soal
+Peta domain harus memetakan pintu masuk utama dan tetap bisa mencari alamat di luar kawasan Shibuya. Pada utahime, buat A record `jujutsu.k04.com` yang mengarah ke gojo, serta CNAME `www` yang merujuk ke domain utama tersebut. Buat pula Reverse DNS (zona PTR) untuk melacak IP gojo kembali ke domain resminya, dan aktifkan fitur DNS Forwarder pada BIND9 mengarah ke IP gateway internet (`192.168.122.1`). Uji dari client dengan dig untuk mengecek CNAME, PTR, dan buktikan client tetap bisa melakukan ping ke domain internet seperti google.com.
+
+### Maksud Soal
+Tujuan soal ini adalah melengkapi zona DNS dari Soal 11 agar dapat digunakan oleh layanan web dan klien:
+1. **A record** `jujutsu.k04.com` diarahkan ke `gojo` (`192.213.1.4`) sebagai pintu masuk utama (public reverse proxy).
+2. **CNAME** `www.jujutsu.k04.com` dibuat sebagai alias dari `jujutsu.k04.com`, sehingga kedua nama mengarah ke tujuan yang sama.
+3. **Reverse DNS (PTR)** dibuat pada zona `1.213.192.in-addr.arpa`, sehingga IP `192.213.1.4` dapat diterjemahkan kembali menjadi `jujutsu.k04.com`.
+4. **DNS Forwarder** ke `192.168.122.1` diaktifkan, sehingga query untuk domain di luar zona lokal (misalnya `google.com`) diteruskan ke DNS internet. Klien cukup memakai DNS internal (`192.213.1.2` dan `192.213.1.3`) namun tetap dapat mengakses internet.
+
+### Cara Mengerjakan
+#### 1. Konfigurasi `utahime` (DNS Master)
+Forwarder pada `/etc/bind/named.conf.options`:
+```
+options {
+    directory "/var/cache/bind";
+    forwarders { 192.168.122.1; };
+    dnssec-validation no;
+    allow-query { any; };
+    allow-recursion { any; };
+    listen-on { any; };
+    listen-on-v6 { any; };
+};
+```
+
+Penambahan zona reverse pada `/etc/bind/named.conf.local`:
+```
+zone "1.213.192.in-addr.arpa" {
+    type master;
+    file "/etc/bind/jujutsu/1.213.192.in-addr.arpa";
+    allow-transfer { 192.213.1.3; };
+    also-notify { 192.213.1.3; };
+    notify yes;
+};
+```
+
+Penambahan record pada zona utama `/etc/bind/jujutsu/jujutsu.k04.com` (serial dinaikkan menjadi `2026101503`):
+```
+@       IN      A       192.213.1.4
+www     IN      CNAME   jujutsu.k04.com.
+```
+
+Berkas zona reverse `/etc/bind/jujutsu/1.213.192.in-addr.arpa`:
+```
+$TTL    604800
+@       IN      SOA     ns1.jujutsu.k04.com. admin.jujutsu.k04.com. (
+                        2026101503 ; Serial
+                        604800     ; Refresh
+                        86400      ; Retry
+                        2419200    ; Expire
+                        604800 )   ; Negative Cache TTL
+@       IN      NS      ns1.jujutsu.k04.com.
+@       IN      NS      ns2.jujutsu.k04.com.
+2       IN      PTR     ns1.jujutsu.k04.com.
+3       IN      PTR     ns2.jujutsu.k04.com.
+4       IN      PTR     jujutsu.k04.com.
+```
+
+Validasi dan restart:
+```bash
+named-checkconf && \
+named-checkzone jujutsu.k04.com /etc/bind/jujutsu/jujutsu.k04.com && \
+named-checkzone 1.213.192.in-addr.arpa /etc/bind/jujutsu/1.213.192.in-addr.arpa && \
+service named restart
+```
+
+#### 2. Konfigurasi `shoko` (DNS Slave)
+Forwarder yang sama ditambahkan pada `/etc/bind/named.conf.options`, lalu zona reverse didaftarkan sebagai slave pada `/etc/bind/named.conf.local`:
+```
+zone "1.213.192.in-addr.arpa" {
+    type slave;
+    masters { 192.213.1.2; };
+    file "/var/lib/bind/1.213.192.in-addr.arpa";
+};
+```
+```bash
+named-checkconf && service named restart
+```
+
+### Cara Melakukan Validasi
+* Pemuatan zona utama dan zona reverse di `utahime`:
+
+  ![Zona utama dan reverse di utahime](assets/langkah_12.1.png)
+
+  Kedua zona (`jujutsu.k04.com` dan `1.213.192.in-addr.arpa`) berhasil dimuat dengan serial `2026101503` dan dinyatakan valid (`OK`), lalu service `named` di-restart.
+
+* Sinkronisasi zona ke `shoko`:
+
+  ![Zona slave di shoko](assets/langkah_12.2.png)
+
+  Direktori `/var/lib/bind/` pada `shoko` berisi dua berkas zona hasil transfer dari master, yaitu `jujutsu.k04.com` dan `1.213.192.in-addr.arpa`.
+
+* Pengujian A record, CNAME, dan PTR dari client `itadori`:
+
+  ![dig A, CNAME, dan PTR dari itadori](assets/langkah_12.3.png)
+
+  Query `jujutsu.k04.com` menghasilkan `192.213.1.4` (gojo). Query `www.jujutsu.k04.com` menunjukkan record `CNAME` ke `jujutsu.k04.com.` yang kemudian di-resolve ke `192.213.1.4`. Reverse lookup `dig -x 192.213.1.4` mengembalikan `jujutsu.k04.com.`, membuktikan zona PTR berjalan.
+
+* Pengujian DNS Forwarder dari client `itadori`:
+
+  ![Ping google.com dari itadori](assets/langkah_12.4.png)
+
+  Berkas `/etc/resolv.conf` pada `itadori` hanya berisi DNS internal (`192.213.1.2` dan `192.213.1.3`), namun `ping -c 3 google.com` tetap berhasil dengan 0% packet loss. Hal ini membuktikan query domain internet diteruskan oleh BIND9 ke forwarder `192.168.122.1`.
+
+---
