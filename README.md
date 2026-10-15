@@ -1485,3 +1485,90 @@ service nginx stop
   Setelah Nginx pada `nanami` dan `todo` dinyalakan kembali dan melewati `fail_timeout` 5 detik, request kembali dilayani oleh worker utama dan `kirara` kembali menganggur.
 
 ---
+
+## Soal 19: Proxy Caching & Rate Limiting pada Gojo
+
+### Penyampaian Ulang Soal
+gojo bertugas mengoptimalkan layanan web sekaligus membatasi request berlebihan. Konfigurasikan Nginx Proxy Caching untuk halaman web frontend dengan masa berlaku cache 10 menit dan tambahkan header X-Cache-Status. Terapkan rate limiting pada path `/api` dengan batas 10 request per detik per IP klien. Buktikan bahwa request ke halaman web yang memenuhi syarat cache menghasilkan status MISS pada akses awal dan HIT pada akses berikutnya. Uji rate limiting secara terpisah dengan mengirimkan request beruntun ke `/api`, kemudian catat status respons yang dihasilkan ketika batas terlampaui.
+
+### Maksud Soal
+Tujuan soal ini adalah menambahkan dua mekanisme pada public reverse proxy `gojo`:
+1. **Proxy Caching** untuk path `/`: respons sukses (HTTP 200) dari web frontend disimpan di `gojo` selama 10 menit. Request berikutnya dijawab langsung dari cache tanpa diteruskan ke `maki`/`panda`. Header `X-Cache-Status` menunjukkan `MISS` (diambil dari backend) atau `HIT` (diambil dari cache).
+2. **Rate Limiting** untuk path `/api`: setiap IP klien (`$binary_remote_addr`) dibatasi 10 request per detik menggunakan algoritma leaky bucket. Request yang melebihi batas ditolak dengan status **`429 Too Many Requests`**, dipilih agar dapat dibedakan dari kegagalan aplikasi (502/503) pada analisis Soal 20.
+3. **Access log khusus** (`gojo_log`) mencatat status, upstream tujuan, status upstream, waktu respons, dan status cache untuk keperluan analisis.
+
+### Cara Mengerjakan
+Berkas `/etc/nginx/sites-available/gojo`:
+```nginx
+log_format gojo_log '$remote_addr - [$time_local] "$request" status=$status '
+                    'upstream=$upstream_addr upstream_status=$upstream_status '
+                    'rt=$request_time cache=$upstream_cache_status';
+
+proxy_cache_path /var/cache/nginx/web levels=1:2 keys_zone=webcache:10m max_size=100m inactive=10m use_temp_path=off;
+
+limit_req_zone $binary_remote_addr zone=api_limit:10m rate=10r/s;
+
+upstream web_frontend {
+    zone web_frontend 64k;
+    server 192.213.4.31;   # maki
+    server 192.213.4.32;   # panda
+}
+
+server {
+    listen 80 default_server;
+    server_name jujutsu.k04.com www.jujutsu.k04.com;
+    access_log /var/log/nginx/gojo_access.log gojo_log;
+
+    location / {
+        proxy_pass http://web_frontend;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+
+        proxy_cache        webcache;
+        proxy_cache_valid  200 10m;
+        add_header X-Cache-Status $upstream_cache_status always;
+    }
+
+    location /api {
+        limit_req zone=api_limit;
+        limit_req_status 429;
+
+        proxy_pass http://192.213.4.20;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    }
+}
+```
+```bash
+mkdir -p /var/cache/nginx
+nginx -t && nginx -s reload
+```
+
+### Cara Melakukan Validasi
+* Penerapan konfigurasi di `gojo`:
+
+  ![Konfigurasi cache dan rate limit gojo](assets/m3_langkah_19.1.png)
+
+  Konfigurasi valid dan dimuat ulang. Terdapat `proxy_cache_path` dengan zona `webcache`, `limit_req_zone` 10 r/s, `access_log` berformat `gojo_log`, header `X-Cache-Status`, serta `limit_req_status 429` pada `/api`.
+
+* Pengujian proxy caching dari client `itadori`:
+
+  ![Cache MISS lalu HIT](assets/m3_langkah_19.2.png)
+
+  Akses pertama ke `http://jujutsu.k04.com/` menghasilkan `X-Cache-Status: MISS`, sedangkan akses kedua dan ketiga menghasilkan `X-Cache-Status: HIT`. Worker yang tercantum tetap sama (`maki`), membuktikan respons berasal dari cache `gojo`, bukan dari round robin ke backend.
+
+* Pengujian rate limiting dari client `itadori`:
+
+  ![Rate limit 429](assets/m3_langkah_19.3.png)
+
+  Dari 20 request beruntun ke `/api`, hanya 2 request yang lolos dengan status `200`, sedangkan 18 request lainnya ditolak dengan status **`429 Too Many Requests`** karena melebihi batas 10 request per detik per IP.
+
+* Pencatatan pada access log `gojo`:
+
+  ![Access log gojo](assets/m3_langkah_19.4.png)
+
+  Request yang ditolak tercatat dengan `status=429 upstream=-`, menandakan request dihentikan langsung oleh `gojo` tanpa diteruskan ke `geto`. Request yang lolos tercatat `status=200 upstream=192.213.4.20:80 upstream_status=200`.
+
+---
