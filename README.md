@@ -1251,3 +1251,71 @@ ip -4 addr show eth0 | grep brd
 
 cat /var/lib/dhcp/dhcpd.leases
 awk '/^lease/{ip=$2} /binding state/{st[ip]=$3} /hardware ethernet/{mac[ip]=$3} END{for(i in st) print i, mac[i, st[i]]}' /var/lib/dhcp/dhcpd.leases
+
+
+## Soal 16: Path-Based Routing pada Gojo
+
+### Penyampaian Ulang Soal
+Gojo berdiri di perbatasan DMZ sebagai gerbang publik tunggal bagi seluruh client dari luar maupun dalam. Konfigurasikan Nginx pada gojo untuk melayani domain `jujutsu.k04.com` dan `www.jujutsu.k04.com` menggunakan metode Path-Based Routing. Atur agar request root (`/`) diteruskan secara Round Robin ke worker frontend (maki dan panda), sedangkan request ke path `/api` diteruskan langsung ke geto. Uji dari client Divisi A atau B bahwa akses ke web utama dibalas oleh Maki/Panda, sedangkan akses ke `/api` diteruskan dan dijawab oleh Nanami/Todo.
+
+### Maksud Soal
+Tujuan soal ini adalah menjadikan `gojo` (`192.213.1.4`) sebagai **public reverse proxy** tunggal yang menentukan tujuan request berdasarkan **path URL**:
+1. Domain `jujutsu.k04.com` dan alias `www.jujutsu.k04.com` (CNAME dari Soal 12) dilayani oleh satu blok `server`.
+2. Request ke path `/` diteruskan ke upstream `web_frontend` yang berisi `maki` dan `panda` dengan algoritma Round Robin.
+3. Request ke path `/api` diteruskan ke load balancer internal `geto` (`192.213.4.20`), yang kemudian membagikannya ke `nanami` dan `todo` dengan rasio 3:1 (Soal 15).
+4. Nginx memilih blok `location` dengan prefix yang paling cocok, sehingga `/api` ditangani oleh `location /api`, sedangkan path lainnya ditangani oleh `location /`.
+
+### Cara Mengerjakan
+Berkas `/etc/nginx/sites-available/gojo`:
+```nginx
+upstream web_frontend {
+    zone web_frontend 64k;
+    server 192.213.4.31;   # maki
+    server 192.213.4.32;   # panda
+}
+
+server {
+    listen 80 default_server;
+    server_name jujutsu.k04.com www.jujutsu.k04.com;
+
+    # Path "/" -> worker frontend (Round Robin)
+    location / {
+        proxy_pass http://web_frontend;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    }
+
+    # Path "/api" -> load balancer internal geto
+    location /api {
+        proxy_pass http://192.213.4.20;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    }
+}
+```
+```bash
+nginx -t && nginx -s reload
+```
+
+### Cara Melakukan Validasi
+* Penerapan konfigurasi path-based routing di `gojo`:
+
+  ![Konfigurasi path-based routing gojo](assets/m3_langkah_16.1.png)
+
+  Konfigurasi valid (`test is successful`) dan berhasil dimuat ulang. Terdapat dua blok, yaitu `location /` untuk web frontend dan `location /api` untuk API.
+
+* Pengujian dari client Divisi A (`itadori`, `192.213.2.10`):
+
+  ![Pengujian dari itadori](assets/m3_langkah_16.2.png)
+
+  Akses `http://jujutsu.k04.com/` dibalas bergantian oleh `maki` dan `panda`. Akses `http://www.jujutsu.k04.com/api` diteruskan melalui `geto` dan dijawab oleh `nanami` dan `todo` dengan pola 3:1, serta `path` tercatat sebagai `/api`.
+
+* Pengujian dari client Divisi B (`ino`, `192.213.3.10`):
+
+  ![Pengujian dari ino](assets/m3_langkah_16.3.png)
+
+  Hasil yang sama diperoleh dari Network 3: path `/` dilayani `maki`/`panda`, sedangkan path `/api` dijawab oleh `nanami`/`todo`. Hal ini membuktikan `gojo` berfungsi sebagai gerbang publik tunggal dengan path-based routing.
+
+---
